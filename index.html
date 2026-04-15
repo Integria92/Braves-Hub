@@ -554,6 +554,12 @@ th[data-tip]{border-bottom:1px dotted rgba(234,170,0,.4)}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--navy-light)}
 
+/* ── LEADERS SPLIT PANEL ── */
+.leaders-split{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
+.split-panel-lbl{font-family:'Oswald',sans-serif;font-size:.85rem;font-weight:700;
+  color:var(--gold);letter-spacing:2px;text-transform:uppercase;
+  padding:8px 0 10px;border-bottom:1px solid var(--border);margin-bottom:12px}
+@media(max-width:900px){.leaders-split{grid-template-columns:1fr}}
 /* ── NIGHTLY PERFORMER CARDS ── */
 .nightly-card{display:grid;grid-template-columns:58px 1fr auto;align-items:center;
   gap:0;border-radius:8px;overflow:hidden;margin-bottom:7px;cursor:pointer;
@@ -565,7 +571,8 @@ th[data-tip]{border-bottom:1px dotted rgba(234,170,0,.4)}
   font-weight:700;color:rgba(255,255,255,.2);letter-spacing:1px}
 .nc-logo{width:58px;min-height:72px;display:flex;align-items:center;justify-content:center;
   padding:0 8px;background:rgba(0,0,0,.3);flex-shrink:0}
-.nc-logo img{width:36px;height:36px;object-fit:contain}
+.nc-logo img{width:36px;height:36px;object-fit:contain;
+  background:rgba(255,255,255,.92);border-radius:50%;padding:4px}
 .nc-info{padding:8px 12px;flex:1;min-width:0}
 .nc-fname{font-family:'Roboto Mono',monospace;font-size:.58rem;color:rgba(255,255,255,.45);
   letter-spacing:1.5px;text-transform:uppercase}
@@ -718,6 +725,7 @@ tr.career-row td:first-child{color:var(--gold)}
     <button class="nav-tab" onclick="switchTab('transactions')">🔄 Transactions</button>
     <button class="nav-tab" onclick="switchTab('minors')">⚾ Minor Leagues</button>
     <button class="nav-tab" onclick="switchTab('scores')">🎯 Live Scores</button>
+    <button class="nav-tab" onclick="switchTab('performers')">⚡ Performers & Leaders</button>
     <button class="nav-tab" id="player-nav-tab" style="display:none" onclick="switchTab('player')">👤 <span id="player-nav-name">Player</span></button>
     <button class="nav-tab" id="game-nav-tab" style="display:none" onclick="switchTab('game')">📋 <span id="game-nav-name">Box Score</span></button>
   </div>
@@ -813,7 +821,7 @@ tr.career-row td:first-child{color:var(--gold)}
 
   <!-- LIVE SCORES -->
   <div id="tab-scores" class="tab-pane">
-    <div class="sec-title">🎯 Today's MLB Scores
+    <div class="sec-title">🎯 Today's MLB Scores &amp; Yesterday's Results
       <span class="sec-spacer"></span>
       <span id="scores-date-label" style="font-family:'Roboto Mono',monospace;font-size:.7rem;color:var(--muted)"></span>
       &nbsp; Auto-refresh: <span class="countdown" id="scores-countdown">10:00</span>
@@ -821,18 +829,21 @@ tr.career-row td:first-child{color:var(--gold)}
       <button class="refresh-btn" onclick="refreshTab('scores')">↻ Refresh</button>
     </div>
     <div class="scores-layout">
-      <!-- LEFT: yesterday + games + league leaders -->
       <div class="scores-main">
-        <div id="nightly-container" style="margin-bottom:22px"></div>
         <div id="yesterday-container" style="margin-bottom:20px"></div>
         <div id="scores-container"><div class="loading"><div class="spinner"></div>Loading Scores…</div></div>
-        <div id="leaders-container" style="margin-top:20px"></div>
       </div>
       <!-- RIGHT: standings sidebar -->
       <div class="scores-sidebar">
         <div id="standings-container"><div class="loading" style="padding:20px"><div class="spinner"></div></div></div>
       </div>
     </div>
+  </div>
+
+  <!-- PERFORMERS & LEADERS -->
+  <div id="tab-performers" class="tab-pane">
+    <div id="nightly-container" style="margin-bottom:22px"></div>
+    <div id="leaders-container"></div>
   </div>
 
   <!-- GAME BOX SCORE TAB -->
@@ -918,7 +929,6 @@ window.addEventListener('load', () => {
   loadTab('news');
   loaded['news' + season] = true;
   loadNextGameBanner(); // always visible
-  loadNightlyLeaders(); // pre-load for scores tab
 });
 
 // ─── SEASON ───────────────────────────────────────────────
@@ -964,16 +974,16 @@ function loadTab(name) {
     case 'transactions': loadTransactions(); startTxnAutoRefresh(); break;
     case 'minors':       loadMinors(); break;
     case 'scores':       loadScores(); break;
+    case 'performers':   loadNightlyLeaders(); loadLeaders(); break;
   }
 }
 
 function refreshTab(name) {
-  // Clear all cache keys for this tab
   Object.keys(cache).forEach(k => { if (k.startsWith(name)) delete cache[k]; });
   Object.keys(loaded).forEach(k => { if (k.startsWith(name)) delete loaded[k]; });
-  // Also clear season-specific state
   if (name === 'schedule') schedGames = [];
   if (name === 'minors') { milbTeams = []; milbTeamIdx = 0; }
+  if (name === 'performers') { nightlyLoaded = false; }
   loadTab(name);
   loaded[name + season] = true;
 }
@@ -2263,7 +2273,7 @@ async function loadScores() {
   }
 
   // ── League Leaders ──
-  loadLeaders();
+  // (Moved to Performers & Leaders tab)
 
   // ── Yesterday's Results ──
   try {
@@ -2522,20 +2532,22 @@ async function loadLeaders() {
       ['W','wins'],['SV','saves']
     ];
 
-    const hitHtml = `<div class="leaders-grid">${hitCols.map(([t,c]) => buildLeaderCol(t,c)).join('')}</div>`;
-    const pitHtml = `<div class="leaders-grid">${pitCols.map(([t,c]) => buildLeaderCol(t,c)).join('')}</div>`;
+    const hitHtml = `
+      <div class="split-panel-lbl">⚾ Hitting Leaders</div>
+      <div class="leaders-grid">${hitCols.map(([t,c]) => buildLeaderCol(t,c)).join('')}</div>`;
+    const pitHtml = `
+      <div class="split-panel-lbl">🎯 Pitching Leaders</div>
+      <div class="leaders-grid">${pitCols.map(([t,c]) => buildLeaderCol(t,c)).join('')}</div>`;
 
     el.innerHTML = `
       <div class="sec-title" style="margin-top:8px">🏆 MLB Stat Leaders
         <span class="badge">${season}</span>
         <span class="badge badge-gold" style="font-size:.55rem">TOP 10</span>
       </div>
-      <div class="leaders-tabs">
-        <button class="ldrtab active" onclick="switchLeaderTab('hit',this)">⚾ Hitting</button>
-        <button class="ldrtab" onclick="switchLeaderTab('pit',this)">🎯 Pitching</button>
-      </div>
-      <div id="ldr-hit" class="leaders-pane active">${hitHtml}</div>
-      <div id="ldr-pit" class="leaders-pane">${pitHtml}</div>`;
+      <div class="leaders-split">
+        <div>${hitHtml}</div>
+        <div>${pitHtml}</div>
+      </div>`;
 
   } catch {
     el.innerHTML = `<div class="sec-title" style="margin-top:8px">🏆 League Leaders</div>
@@ -3197,12 +3209,16 @@ async function loadNightlyLeaders() {
         <span class="sec-spacer"></span>
         <button class="refresh-btn" onclick="loadNightlyLeaders()">↻ Refresh</button>
       </div>
-      <div class="leaders-tabs">
-        <button class="ldrtab active" onclick="switchNightlyTab('bat',this)">🏏 Batting Leaders</button>
-        <button class="ldrtab" onclick="switchNightlyTab('pit',this)">🎯 Pitching Leaders</button>
-      </div>
-      <div id="nly-bat" class="leaders-pane active">${top8Bat.map((p,i)=>nightlyCard(p,i+1,'bat')).join('')}</div>
-      <div id="nly-pit" class="leaders-pane">${top8Pit.map((p,i)=>nightlyCard(p,i+1,'pit')).join('')}</div>`;
+      <div class="leaders-split">
+        <div>
+          <div class="split-panel-lbl">🏏 Batting Leaders</div>
+          ${top8Bat.length ? top8Bat.map((p,i)=>nightlyCard(p,i+1,'bat')).join('') : '<div class="empty-msg">No batting data.</div>'}
+        </div>
+        <div>
+          <div class="split-panel-lbl">🎯 Pitching Leaders</div>
+          ${top8Pit.length ? top8Pit.map((p,i)=>nightlyCard(p,i+1,'pit')).join('') : '<div class="empty-msg">No pitching data.</div>'}
+        </div>
+      </div>`;
 
   } catch(e) { el.innerHTML = ''; }
 }

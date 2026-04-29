@@ -554,6 +554,13 @@ th[data-tip]{border-bottom:1px dotted rgba(234,170,0,.4)}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--navy-light)}
 
+/* ── SORTABLE TABLE HEADERS ── */
+th[data-col]{cursor:pointer;user-select:none;white-space:nowrap;position:relative;padding-right:18px!important}
+th[data-col]:hover{color:#fff}
+th[data-col]::after{content:'⇅';position:absolute;right:4px;top:50%;transform:translateY(-50%);
+  font-size:.65em;opacity:.35}
+th[data-col].sort-asc::after{content:'▲';opacity:1;color:var(--gold)}
+th[data-col].sort-desc::after{content:'▼';opacity:1;color:var(--gold)}
 /* ── LEADERS SPLIT PANEL ── */
 .leaders-split{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start}
 .split-panel-lbl{font-family:'Oswald',sans-serif;font-size:.85rem;font-weight:700;
@@ -1018,6 +1025,20 @@ function tableWrap(title, thead, tbody) {
     <div class="tbl-wrap"><table><thead>${thead}</thead><tbody>${tbody}</tbody></table></div></div>`;
 }
 
+// Auto-number all <th> in a container so data-col is set correctly.
+// Call after injecting any HTML with tables into the DOM.
+function injectSortCols(container) {
+  if (!container) return;
+  container.querySelectorAll('table').forEach(tbl => {
+    tbl.querySelectorAll('thead th').forEach((th, i) => {
+      // Skip columns where sorting doesn't make sense (W-L combined, Status)
+      const txt = th.textContent.trim();
+      if (txt === 'W–L' || txt === 'Status' || txt === 'POS' || txt === '') return;
+      th.dataset.col = i;
+    });
+  });
+}
+
 // ─── RSS WITH FALLBACKS ───────────────────────────────────
 function parseRSSXML(xmlText, count) {
   try {
@@ -1084,6 +1105,17 @@ async function fetchRSS(rssUrl, count = 24) {
   try {
     const r = await fetch(
       `https://thingproxy.freeboard.io/fetch/${rssUrl}`,
+      {signal: AbortSignal.timeout(7000)}
+    );
+    const text = await r.text();
+    const items = parseRSSXML(text, count);
+    if (items.length) return items;
+  } catch {}
+
+  // Method 5: cors.sh
+  try {
+    const r = await fetch(
+      `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(rssUrl)}`,
       {signal: AbortSignal.timeout(7000)}
     );
     const text = await r.text();
@@ -1544,6 +1576,7 @@ async function openGameModal(gamePk, matchup, dateStr, state, myScore, opScore, 
 
     document.getElementById('game-tab-container').innerHTML =
       content || '<div class="empty-msg">Box score data not yet available.</div>';
+    injectSortCols(document.getElementById('game-tab-container'));
 
   } catch {
     document.getElementById('game-tab-container').innerHTML =
@@ -1577,6 +1610,7 @@ async function switchStats(view) {
     }
     cache[key] = html;
     document.getElementById('stats-container').innerHTML = html;
+    injectSortCols(document.getElementById('stats-container'));
   } catch {
     document.getElementById('stats-container').innerHTML =
       `<div class="error-msg">No ${view} data available for ${season} yet.<br>
@@ -1998,6 +2032,7 @@ async function openPlayerModal(playerId, playerName, statGroup) {
       <div class="loading" style="padding:16px"><div class="spinner"></div>Loading Statcast…</div>
     </div>`;
     document.getElementById('player-tab-container').innerHTML = bioHtml + statsHtml + savantPlaceholder;
+    injectSortCols(document.getElementById('player-tab-container'));
 
 
     // Fire Savant fetch async after main content is shown
@@ -2149,6 +2184,7 @@ async function loadMilbData(team) {
     }
     cache[key] = html;
     document.getElementById('minors-container').innerHTML = html;
+    injectSortCols(document.getElementById('minors-container'));
   } catch {
     errMsg('minors-container', `No ${milbView} data available for ${team.name} in ${season} yet.`);
   }
@@ -3391,7 +3427,54 @@ function filterStandings(league) {
   }
 
   el.innerHTML = `<div class="card"><div class="tbl-wrap"><table class="stand-tbl">${thead}<tbody>${tbody}</tbody></table></div></div>`;
+  injectSortCols(el);
 }
+
+
+// ─── UNIVERSAL TABLE SORT ─────────────────────────────────
+// Works on ANY table with data-col="N" on <th> elements.
+function sortTable(th) {
+  const table = th.closest('table');
+  if (!table) return;
+  const col   = parseInt(th.dataset.col);
+  const tbody = table.querySelector('tbody');
+  if (!tbody) return;
+
+  const wasDesc = th.classList.contains('sort-desc');
+  const desc    = !wasDesc; // toggle; first click = desc (largest first)
+
+  table.querySelectorAll('th[data-col]').forEach(h => h.classList.remove('sort-asc','sort-desc'));
+  th.classList.add(desc ? 'sort-desc' : 'sort-asc');
+
+  // Only sort rows that have enough cells (skip group-header rows)
+  const rows = Array.from(tbody.querySelectorAll('tr')).filter(r =>
+    r.querySelectorAll('td').length > col
+  );
+
+  const parseVal = str => {
+    if (!str || str === '—' || str === '-' || str === '' || str === '-.--') {
+      return desc ? -Infinity : Infinity;
+    }
+    const clean = str.replace(/[+%]/g,'').replace(/[^0-9.\-]/g,'');
+    const n = parseFloat(clean);
+    return isNaN(n) ? str.toLowerCase() : n;
+  };
+
+  rows.sort((a, b) => {
+    const av = parseVal(a.querySelectorAll('td')[col]?.textContent?.trim());
+    const bv = parseVal(b.querySelectorAll('td')[col]?.textContent?.trim());
+    if (typeof av === 'number' && typeof bv === 'number') return desc ? bv - av : av - bv;
+    return desc ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+// Wire sort to all tables globally via event delegation
+document.addEventListener('click', e => {
+  const th = e.target.closest('th[data-col]');
+  if (th) sortTable(th);
+});
 
 (function() {
   const tip = document.getElementById('stat-tooltip');
